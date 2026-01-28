@@ -1,0 +1,30 @@
+# IDE configuration
+.idea/
+.vscode/
+
+# System files
+.DS_Store
+
+# Logs
+*.log
+logs.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environment
+.env
+venv/
+env/
+
+# data
+data/raw/*.csv
+
+SKILL.md
