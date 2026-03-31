@@ -303,3 +303,81 @@ def filling_non_holiday_missing_values(df):
     print(f"Remaining NaN values: {final_missing}")
 
     return df
+
+
+def exclude_startup_period(df, cutoff='2021-02-01', date_column='date'):
+    """
+    Exclude noisy startup period from the dataset.
+    
+    January 2021 has CV=0.64 with unexplained Friday zeros and 
+    inconsistent operating schedules. Removing this startup noise
+    prevents it from poisoning lag features and model training.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with date column
+    cutoff : str
+        Date to start including data from (default: '2021-02-01')
+    date_column : str
+        Name of the date column
+    
+    Returns:
+    --------
+    pd.DataFrame : Filtered data starting from cutoff date
+    """
+    df = df.copy()
+    df[date_column] = pd.to_datetime(df[date_column])
+    
+    original_rows = len(df)
+    df_filtered = df[df[date_column] >= pd.to_datetime(cutoff)].reset_index(drop=True)
+    removed_rows = original_rows - len(df_filtered)
+    
+    print(f"Excluded startup period (before {cutoff}): removed {removed_rows} rows")
+    print(f"  Remaining: {len(df_filtered)} rows ({df_filtered[date_column].min().date()} to {df_filtered[date_column].max().date()})")
+    
+    return df_filtered
+
+
+def cap_outliers(df, percentile=0.95, group_col='item', value_col='quantity'):
+    """
+    Cap extreme outlier values at the per-item percentile threshold.
+    
+    Special event days (festivals, catering orders) can hit 2-3x normal volume.
+    Capping at the 95th percentile limits their influence on model training
+    without removing the data entirely.
+    
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame with quantity values
+    percentile : float
+        Percentile threshold for capping (default: 0.95)
+    group_col : str
+        Column to group by for per-group thresholds (default: 'item')
+    value_col : str
+        Column to cap (default: 'quantity')
+    
+    Returns:
+    --------
+    pd.DataFrame : Data with capped values
+    """
+    df = df.copy()
+    
+    total_capped = 0
+    cap_details = []
+    
+    for group_name, group_data in df.groupby(group_col):
+        threshold = group_data[value_col].quantile(percentile)
+        mask = (df[group_col] == group_name) & (df[value_col] > threshold)
+        capped_count = mask.sum()
+        total_capped += capped_count
+        
+        df.loc[mask, value_col] = threshold
+        cap_details.append(f"  {group_name}: capped {capped_count} values above {threshold:.1f}")
+    
+    print(f"Outlier capping at {percentile*100:.0f}th percentile: {total_capped} values capped")
+    for detail in cap_details:
+        print(detail)
+    
+    return df

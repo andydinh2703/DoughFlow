@@ -27,5 +27,23 @@ env/
 # data
 data/raw/*.csv
 
+# Generated model artifacts
+models/*.pkl
+models/*_metadata.json
+
+# Processed data (pipeline outputs — regenerate via complete_pipeline.py)
+data/processed/
+
+# Generated reports and figures
+reports/figures/
+reports/model_comparison_enhanced.csv
+
+# Python package build artifacts
+src/*.egg-info/
+
 # Claude
 .claude
+.agents
+skills-lock.json
+.github
+.venv

@@ -4,29 +4,45 @@ Feature engineering for bakery sales forecasting.
 This module transforms raw date information into features suitable for
 machine learning models
 """
-import pandas as pd 
+import pandas as pd
+import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 
 class TemporalFeatureExtractor(BaseEstimator, TransformerMixin):
     """
     Extract multiple temporal features from the date column.
 
-    Features created: 
+    Features created:
     - day_of_week: 0 (Monday) to 6 (Sunday)
     - month
     - year
     - week of year: 1,2,3,... 52
     - day of month: 1 to 31
     - is_weekend: yes | no
+
+    Optional cyclical encoding:
+    - day_of_week_sin, day_of_week_cos
+    - month_sin, month_cos
+    - week_of_year_sin, week_of_year_cos
     """
+
+    def __init__(self, add_cyclical_encoding=False):
+        """
+        Parameters
+        ----------
+        add_cyclical_encoding : bool
+            If True, add sin/cos pairs for cyclical features (day_of_week, month, week_of_year).
+            This helps models capture circular relationships (e.g., Monday is close to Sunday).
+        """
+        self.add_cyclical_encoding = add_cyclical_encoding
 
     def fit(self, X, y = None):
         return self
-    
+
     def transform(self, X, y=None):
         X_copy = X.copy()
 
-        # converting to datetime 
+        # converting to datetime
         X_copy['date'] = pd.to_datetime(X_copy['date'])
 
         # extracting features
@@ -37,7 +53,33 @@ class TemporalFeatureExtractor(BaseEstimator, TransformerMixin):
         X_copy['week_of_year'] = X_copy['date'].dt.isocalendar().week
         X_copy['is_weekend'] = (X_copy['day_of_week'].isin([5,6])).astype(int)
 
+        # Add cyclical encoding if requested
+        if self.add_cyclical_encoding:
+            X_copy = self._create_cyclical_features(X_copy)
+
         return X_copy
+
+    def _create_cyclical_features(self, X):
+        """
+        Create sin/cos pairs for cyclical temporal features.
+
+        This preserves circular relationships: Monday (0) and Sunday (6) are
+        actually adjacent in the weekly cycle, but numerically far apart.
+        Sin/cos encoding fixes this by mapping them to points on a circle.
+        """
+        # Day of week (period 7)
+        X['day_of_week_sin'] = np.sin(2 * np.pi * X['day_of_week'] / 7)
+        X['day_of_week_cos'] = np.cos(2 * np.pi * X['day_of_week'] / 7)
+
+        # Month (period 12)
+        X['month_sin'] = np.sin(2 * np.pi * X['month'] / 12)
+        X['month_cos'] = np.cos(2 * np.pi * X['month'] / 12)
+
+        # Week of year (period 52)
+        X['week_of_year_sin'] = np.sin(2 * np.pi * X['week_of_year'] / 52)
+        X['week_of_year_cos'] = np.cos(2 * np.pi * X['week_of_year'] / 52)
+
+        return X
     
 
 class ProductFeatureExtractor(BaseEstimator, TransformerMixin):
@@ -321,4 +363,119 @@ class LagFeatureExtractor(BaseEstimator, TransformerMixin):
 
 
         return X
-    
+
+
+class ExtendedRollingWindowExtractor(BaseEstimator, TransformerMixin):
+    """
+    Create additional rolling window features beyond the standard 7-day window.
+
+    This captures longer-term trends that the basic rolling statistics might miss.
+    Different window sizes capture different temporal scales:
+    - 7-day: Recent weekly pattern
+    - 14-day: Two-week trend
+    - 30-day: Monthly trend
+    """
+
+    def __init__(self, window_sizes=[14, 30], statistics=['mean', 'std']):
+        """
+        Parameters
+        ----------
+        window_sizes : list
+            Rolling window sizes in days (default: [14, 30])
+        statistics : list
+            Statistics to compute: 'mean', 'std', 'min', 'max' (default: ['mean', 'std'])
+        """
+        self.window_sizes = window_sizes
+        self.statistics = statistics
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        X = X.copy()
+
+        # Ensure date is datetime and sorted
+        X['date'] = pd.to_datetime(X['date'])
+
+        # Create item_key for grouping
+        if 'type_of_item' in X.columns:
+            X['item_key'] = X['item'] + '_' + X['type_of_item']
+        else:
+            X['item_key'] = X['item']
+
+        # Sort by item and date
+        X = X.sort_values(['item_key', 'date']).reset_index(drop=True)
+
+        # Create rolling features for each window size
+        for window in self.window_sizes:
+            for stat in self.statistics:
+                col_name = f'rolling_{stat}_{window}d'
+
+                if stat == 'mean':
+                    X[col_name] = X.groupby('item_key')['quantity'].transform(
+                        lambda x: x.shift(1).rolling(window=window, min_periods=1).mean()
+                    )
+                elif stat == 'std':
+                    X[col_name] = X.groupby('item_key')['quantity'].transform(
+                        lambda x: x.shift(1).rolling(window=window, min_periods=1).std()
+                    )
+                elif stat == 'min':
+                    X[col_name] = X.groupby('item_key')['quantity'].transform(
+                        lambda x: x.shift(1).rolling(window=window, min_periods=1).min()
+                    )
+                elif stat == 'max':
+                    X[col_name] = X.groupby('item_key')['quantity'].transform(
+                        lambda x: x.shift(1).rolling(window=window, min_periods=1).max()
+                    )
+
+                # Fill NaN with 0 and round
+                X[col_name] = X[col_name].fillna(0).round(2)
+
+        # Clean up temporary column
+        X = X.drop(columns=['item_key'])
+
+        return X
+
+
+class InteractionFeatureExtractor(BaseEstimator, TransformerMixin):
+    """
+    Create interaction features between temporal and lag features.
+
+    Interactions capture multiplicative effects that simple features miss.
+    Example: Saturday in summer may have different patterns than Saturday in winter.
+    """
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        X = X.copy()
+
+        # Ensure required features exist
+        required = ['day_of_week', 'month', 'is_weekend']
+        missing = [col for col in required if col not in X.columns]
+        if missing:
+            raise ValueError(f"Missing required features: {missing}")
+
+        # Day-of-week × Season interactions
+        # Saturday in summer (peak season)
+        X['saturday_summer'] = ((X['day_of_week'] == 5) &
+                                 (X['month'].isin([6, 7, 8]))).astype(int)
+
+        # Weekend in summer (high demand period)
+        X['weekend_summer'] = (X['is_weekend'] &
+                               (X['month'].isin([6, 7, 8]))).astype(int)
+
+        # Weekend in fall (still strong)
+        X['weekend_fall'] = (X['is_weekend'] &
+                             (X['month'].isin([9, 10, 11]))).astype(int)
+
+        # Lag × temporal interactions (if lag features exist)
+        if 'lag_1w_ago' in X.columns:
+            # Lag × day of week (captures day-specific trends)
+            X['lag_dow_interaction'] = X['lag_1w_ago'] * X['day_of_week']
+
+            # Lag × is_weekend (different weekend behavior)
+            X['lag_weekend_interaction'] = X['lag_1w_ago'] * X['is_weekend']
+
+        return X

@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np 
 from typing import Dict, Tuple
+import matplotlib
+matplotlib.use('Agg')  # Non-interactive backend for headless/terminal use
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path 
@@ -190,7 +192,7 @@ def plot_predictions(
         plt.savefig(save_path, dpi = 300, bbox_inches = 'tight')
         print(f" Plot saved to: {save_path}")
 
-    plt.show()
+    plt.close()
 
 # Plotting residuals to see where model gets wrong
 def plot_residuals(
@@ -269,7 +271,7 @@ def plot_residuals(
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"✓ Residual plot saved to: {save_path}")
     
-    plt.show()
+    plt.close()
 
 # Print Summary Report Function 
 def print_evaluation_summary(

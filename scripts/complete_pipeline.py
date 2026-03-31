@@ -9,11 +9,15 @@ from doughflow.data.make_dataset import (
     filter_operational_days,
     create_complete_date_range,
     fill_holidays_missing_values,
-    filling_non_holiday_missing_values
+    filling_non_holiday_missing_values,
+    exclude_startup_period,
+    cap_outliers
 )
 from doughflow.features.build_features import (
     TemporalFeatureExtractor,
-    LagFeatureExtractor
+    LagFeatureExtractor,
+    ExtendedRollingWindowExtractor,
+    InteractionFeatureExtractor
 )
 from doughflow.data.split_data import (
     fixed_holdout_split,
@@ -74,6 +78,10 @@ def run_complete_pipeline(split_date: str):
     df = pd.read_csv('data/processed/danish_croissant_data.csv')
     print(f"✓ Loaded {len(df)} rows")
 
+    # Step 1b: Exclude noisy startup period (Jan 2021, CV=0.64)
+    print('\n Excluding startup period...')
+    df = exclude_startup_period(df, cutoff='2021-02-01')
+
     # Filter operational days
     print('\n Filtering operational days...')
     operating_data = filter_operational_days(df)
@@ -90,11 +98,11 @@ def run_complete_pipeline(split_date: str):
     data_with_filled_holidays = fill_holidays_missing_values(complete_data, us_holidays)
 
 
-    # Step 5: Temporal features
-    print('\n Adding temporal features...')
-    temporal_extractor = TemporalFeatureExtractor()
+    # Step 5: Temporal features (WITH CYCLICAL ENCODING)
+    print('\n Adding temporal features with cyclical encoding...')
+    temporal_extractor = TemporalFeatureExtractor(add_cyclical_encoding=True)
     data_with_temporal = temporal_extractor.fit_transform(data_with_filled_holidays)
-    print(f"✓ Added temporal features")
+    print(f"✓ Added temporal features (including sin/cos encoding)")
 
     # Step 6: Lag features
     print("\n Adding lag features...")
@@ -102,10 +110,30 @@ def run_complete_pipeline(split_date: str):
     data_with_lags = lag_extractor.fit_transform(data_with_temporal)
     print(f"✓ Added lag features")
 
+    # Step 6b: Extended rolling windows (NEW)
+    print("\n Adding extended rolling window features...")
+    rolling_extractor = ExtendedRollingWindowExtractor(
+        window_sizes=[14, 30],
+        statistics=['mean', 'std']
+    )
+    data_with_extended_rolling = rolling_extractor.fit_transform(data_with_lags)
+    print(f"✓ Added 14-day and 30-day rolling windows")
+
+    # Step 6c: Interaction features (NEW)
+    print("\n Adding interaction features...")
+    interaction_extractor = InteractionFeatureExtractor()
+    data_with_interactions = interaction_extractor.fit_transform(data_with_extended_rolling)
+    print(f"✓ Added interaction features (saturday_summer, weekend×season, lag×dow)")
+
     # Step 7: Fill remaining missing values
     print('\n Filling non-holiday missing values...')
-    final_data = filling_non_holiday_missing_values(data_with_lags)
+    data_filled = filling_non_holiday_missing_values(data_with_interactions)
+
+    # Step 7b: Cap outliers at 95th percentile per item
+    print('\n Capping outliers...')
+    final_data = cap_outliers(data_filled, percentile=0.95)
     print(f"✓ Final data shape: {final_data.shape}")
+    print(f"✓ Total features: {len(final_data.columns) - 3}")  # -3 for date, item, quantity
 
     # Step 8: Validate
     print('\n Validating data...')

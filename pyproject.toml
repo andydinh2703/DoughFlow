@@ -17,7 +17,9 @@ dependencies = [
     "pandas",
     "numpy",
     "scikit-learn",
-    "streamlit"
+    "streamlit",
+    "lightgbm",
+    "xgboost"
 ]
 
 [tool.setuptools.packages.find]
